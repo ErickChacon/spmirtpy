@@ -3,12 +3,15 @@ import numpy as np
 import tensorflow as tf
 # import tensorflow.distributions as distr
 
-def gp(y, dist, params, niter, Sigma_proposal):
+def gpreg(y, dist, params, niter, Sigma_proposal):
     """TODO: Docstring for gp.
     :returns: TODO
 
     """
 
+    # Precomputation outside tensorflow
+    n = np.array(y).size
+    X = np.concatenate([np.ones([n, 1]), np.eye(n)], 1)
     samples = np.zeros((niter, 2))
 
     # Constants
@@ -18,8 +21,9 @@ def gp(y, dist, params, niter, Sigma_proposal):
     # Auxiliary constants
 
     # Parameters
-    sigma2_log = tf.Variable(params[0])
-    phi_log = tf.Variable(params[1])
+    params_log = tf.Variable(params, dtype = tf.float32)
+    sigma2_log = params_log[0,0]
+    phi_log = params_log[1,0]
 
     # Transformations
     sigma2 = tf.exp(sigma2_log)
@@ -27,24 +31,17 @@ def gp(y, dist, params, niter, Sigma_proposal):
 
     # Data
     tf_dis = tf.placeholder(dtype = tf.float32)
-    # tf_x = tf.placeholder(dtype = tf.float32)
     tf_y = tf.placeholder(dtype = tf.float32)
 
     # Computation
-    n = tf.size(y)
-    ones_n = tf.ones([n, 1])
-    zeros_n = tf.zeros([n, 1])
-    eye_n = tf.eye(n)
-    X = tf.concat([ones_n, eye_n], 1)
     Sigma_proposal_chol = tf.cholesky(Sigma_proposal)
-
-
-    params_log = tf.expand_dims(tf.stack([sigma2_log, phi_log], 0), 1)
     Sigma_gp = tf_cov_exp(tf_dis, sigma2, phi, 0)
     Sigma_marginal = prior_c_sigma2 + Sigma_gp
-    Sigma_z = Sigma_marginal + eye_n
-    updater = update(params_log, Sigma_proposal_chol, tf_dis, eye_n, Sigma_z,
-            zeros_n, tf_y, prior_c_sigma2)
+    Sigma_z = Sigma_marginal + tf.eye(n)
+
+    # Metropolis Hastings sampler
+    updater = update(params_log, Sigma_proposal_chol, tf_dis, Sigma_z,
+            tf_y, prior_c_sigma2)
 
     # Arguments
     feed_dict = {
@@ -52,15 +49,19 @@ def gp(y, dist, params, niter, Sigma_proposal):
             tf_y: y
             }
 
+    # Iterate trough MH sampler
     sess = tf.Session()
     sess.run(tf.global_variables_initializer())
     for i in range(niter):
-        bla = sess.run(updater, feed_dict)
-        samples[i, :] = np.reshape(bla, 2)
+        params_new = sess.run(updater, feed_dict)
+        samples[i, :] = np.reshape(np.exp(params_new), 2)
 
+    sess.run(updater, feed_dict)
     return samples
+    # return n
+    # return sess.run(updater, feed_dict)
 
-def update(params_log, Sigma_proposal_chol, tf_dis, eye_n, Sigma_z, zeros_n, tf_y,
+def update(params_log, Sigma_proposal_chol, tf_dis, Sigma_z, tf_y,
         prior_c_sigma2):
     """TODO: Docstring for update.
 
@@ -68,6 +69,8 @@ def update(params_log, Sigma_proposal_chol, tf_dis, eye_n, Sigma_z, zeros_n, tf_
     :returns: TODO
 
     """
+    n = tf.size(tf_y)
+    zeros_n = tf.zeros([n, 1])
     params_log_aux = params_log + \
             tf.matmul(Sigma_proposal_chol,
                     tf.distributions.Normal(0.0, 1.0).sample(tf.shape(params_log)))
@@ -75,7 +78,7 @@ def update(params_log, Sigma_proposal_chol, tf_dis, eye_n, Sigma_z, zeros_n, tf_
     phi_aux = tf.exp(params_log[1])
     Sigma_gp_aux = tf_cov_exp(tf_dis, sigma2_aux, phi_aux, 0)
     Sigma_marginal_aux = prior_c_sigma2 + Sigma_gp_aux
-    Sigma_z_aux = Sigma_marginal_aux + eye_n
+    Sigma_z_aux = Sigma_marginal_aux + tf.eye(n)
     # Sigma_z_aux_chol = tf.cholesky(Sigma_z_aux)
     acceptance_prob_log = dmvnorm(tf_y, zeros_n, Sigma_z_aux) + \
             tf.distributions.Normal(tf.log(1.0),
@@ -100,7 +103,8 @@ def update(params_log, Sigma_proposal_chol, tf_dis, eye_n, Sigma_z, zeros_n, tf_
     # params_log
     # +
 
-    return tf.exp(params_log_new)
+    # return tf.exp(params_log_new)
+    return tf.assign(params_log, params_log_new)
 
 
 
