@@ -1,7 +1,7 @@
 
 import numpy as np
 import tensorflow as tf
-# import tensorflow.distributions as distr
+from tensorflow import distributions as distr
 
 def gpreg(y, dist, params, niter, Sigma_proposal):
     """TODO: Docstring for gp.
@@ -10,44 +10,36 @@ def gpreg(y, dist, params, niter, Sigma_proposal):
     """
 
     # Precomputation outside tensorflow
-    n = np.array(y).size
+    n = y.size
     X = np.concatenate([np.ones([n, 1]), np.eye(n)], 1)
     samples = np.zeros((niter, 2))
 
     # Constants
     Sigma_proposal = tf.constant(Sigma_proposal, dtype = tf.float32)
     prior_c_sigma2 = tf.constant(1.0)
-
-    # Auxiliary constants
+    Sigma_proposal_chol = tf.cholesky(Sigma_proposal)
 
     # Parameters
     params_log = tf.Variable(params, dtype = tf.float32)
-    sigma2_log = params_log[0,0]
-    phi_log = params_log[1,0]
-
-    # Transformations
-    sigma2 = tf.exp(sigma2_log)
-    phi = tf.exp(phi_log)
+    sigma2 = tf.exp(params_log[0,0])
+    phi = tf.exp(params_log[1,0])
 
     # Data
     tf_dis = tf.placeholder(dtype = tf.float32)
     tf_y = tf.placeholder(dtype = tf.float32)
+    feed_dict = {
+            tf_dis: dist,
+            tf_y: y
+            }
 
     # Computation
-    Sigma_proposal_chol = tf.cholesky(Sigma_proposal)
-    Sigma_gp = tf_cov_exp(tf_dis, sigma2, phi, 0)
+    Sigma_gp = tf_cov_exp(tf_dis, sigma2, phi, 0.0)
     Sigma_marginal = prior_c_sigma2 + Sigma_gp
     Sigma_z = Sigma_marginal + tf.eye(n)
 
     # Metropolis Hastings sampler
     updater = update(params_log, Sigma_proposal_chol, tf_dis, Sigma_z,
             tf_y, prior_c_sigma2)
-
-    # Arguments
-    feed_dict = {
-            tf_dis: dist,
-            tf_y: y
-            }
 
     # Iterate trough MH sampler
     sess = tf.Session()
@@ -58,8 +50,6 @@ def gpreg(y, dist, params, niter, Sigma_proposal):
 
     sess.run(updater, feed_dict)
     return samples
-    # return n
-    # return sess.run(updater, feed_dict)
 
 def update(params_log, Sigma_proposal_chol, tf_dis, Sigma_z, tf_y,
         prior_c_sigma2):
@@ -74,38 +64,24 @@ def update(params_log, Sigma_proposal_chol, tf_dis, Sigma_z, tf_y,
     params_log_aux = params_log + \
             tf.matmul(Sigma_proposal_chol,
                     tf.distributions.Normal(0.0, 1.0).sample(tf.shape(params_log)))
-    sigma2_aux = tf.exp(params_log[0])
-    phi_aux = tf.exp(params_log[1])
-    Sigma_gp_aux = tf_cov_exp(tf_dis, sigma2_aux, phi_aux, 0)
+    sigma2_aux = tf.exp(params_log_aux[0,0])
+    phi_aux = tf.exp(params_log_aux[1,0])
+
+    Sigma_gp_aux = tf_cov_exp(tf_dis, sigma2_aux, phi_aux, 0.0)
     Sigma_marginal_aux = prior_c_sigma2 + Sigma_gp_aux
     Sigma_z_aux = Sigma_marginal_aux + tf.eye(n)
-    # Sigma_z_aux_chol = tf.cholesky(Sigma_z_aux)
     acceptance_prob_log = dmvnorm(tf_y, zeros_n, Sigma_z_aux) + \
-            tf.distributions.Normal(tf.log(1.0),
-                    0.4).log_prob(tf.reshape(params_log_aux[0], [])) + \
-            tf.distributions.Normal(tf.log(0.03),
-                    0.4).log_prob(tf.reshape(params_log_aux[1],[])) - \
-            dmvnorm(tf_y, zeros_n, Sigma_z) + \
-            tf.distributions.Normal(tf.log(1.0),
-                    0.4).log_prob(tf.reshape(params_log[0], [])) + \
-            tf.distributions.Normal(tf.log(0.03),
-                    0.4).log_prob(tf.reshape(params_log[1], []))
+            distr.Normal(tf.log(1.0), 0.4).log_prob(params_log_aux[0,0]) + \
+            distr.Normal(tf.log(0.08), 0.4).log_prob(params_log_aux[1,0]) - \
+            dmvnorm(tf_y, zeros_n, Sigma_z) - \
+            distr.Normal(tf.log(1.0), 0.4).log_prob(params_log[0,0]) - \
+            distr.Normal(tf.log(0.08), 0.4).log_prob(params_log[1,0])
 
-    uniform = tf.log(tf.distributions.Uniform().sample())
-    params_log_new = tf.cond(tf.greater(acceptance_prob_log,uniform),\
+    uniform_log = tf.log(tf.distributions.Uniform().sample())
+    params_log_new = tf.cond(tf.greater(acceptance_prob_log,uniform_log),\
             lambda: params_log_aux, lambda: params_log)
 
-            #         lambda: params_log_aux,
-            #         lambda: tf.zeros(tf.shape(params_log)))
-            #
-            # 1.0
-    # params_log_aux = tf.matmul(Sigma_proposal_chol, tf.random_normal([2,1]))
-    # params_log
-    # +
-
-    # return tf.exp(params_log_new)
     return tf.assign(params_log, params_log_new)
-
 
 
 def dmvnorm(y, mean, sigma):
@@ -121,4 +97,15 @@ def tf_cov_exp(d, sigma2, phi, nugget):
     S = sigma2 * tf.exp(- d / phi) + nugget * tf.eye(tf.shape(d)[1])
     return(S)
 
+def test():
+    """TODO: Docstring for test.
+
+    :x: TODO
+    :returns: TODO
+
+    """
+
+    sess0 = tf.Session()
+    bla = tf.ones(10) - tf.ones([10,1])
+    return sess0.run(bla)
 
