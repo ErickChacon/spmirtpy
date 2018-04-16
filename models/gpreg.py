@@ -31,7 +31,7 @@ class geo_normal(object):
                 }
 
 
-    def sample(self, Sigma_proposal, niter, sampler = "rwmh"):
+    def sample(self, Sigma_proposal, niter, sampler = "rwmh", h = 1.0):
         """TODO: Docstring for sample.
         :returns: TODO
 
@@ -55,7 +55,7 @@ class geo_normal(object):
                         self.params_log)[0], self.feed_dict)
             print(initial_logpost_grad)
             self.params_logpost_grad = tf.Variable(initial_logpost_grad)
-            updater = self.update_mala(Sigma_proposal_chol)
+            updater = self.update_mala(Sigma_proposal, h)
 
         # Metropolis Hastings sampler
         if sampler == "rwmh":
@@ -70,6 +70,8 @@ class geo_normal(object):
             for i in range(niter):
                 params_new = sess.run(updater, self.feed_dict)
                 samples[i, :] = np.reshape(np.exp(params_new[0]), 2)
+                # print(params_new[3])
+                # print(sess.run(self.params_logpost_grad, self.feed_dict))
 
         return samples
 
@@ -92,7 +94,7 @@ class geo_normal(object):
         Sigma_z = Sigma_marginal + tf.eye(self.n)
         posterior_prob_log = dmvnorm(self.tf_y, zeros_n, Sigma_z) + \
                 distr.Normal(tf.log(1.0), 0.4).log_prob(params_log[0,0]) + \
-                distr.Normal(tf.log(0.08), 0.4).log_prob(params_log[1,0])
+                distr.Normal(tf.log(0.1), 0.4).log_prob(params_log[1,0])
         return posterior_prob_log
 
 
@@ -124,7 +126,7 @@ class geo_normal(object):
         return op_param, op_logpost
 
 
-    def update_mala(self, L_proposal):
+    def update_mala(self, Sigma_proposal, h):
         """TODO: Docstring for update_rwmh.
 
         :L_proposal: Lower traingular cholesky decomposition of the covariance of the
@@ -135,15 +137,21 @@ class geo_normal(object):
         zeros_n = tf.zeros([self.n, 1])
         dims = tf.shape(self.params_log)
 
+        Sigma_proposal = h * Sigma_proposal
+        L_proposal = tf.cholesky(Sigma_proposal)
         L_inv = tf.matrix_inverse(L_proposal)
 
-        candidate = self.params_log + 0.03 * self.params_logpost_grad
+        candidate = self.params_log
+        candidate += 0.5 * tf.matmul(Sigma_proposal, self.params_logpost_grad)
         candidate += tf.matmul(L_proposal, distr.Normal(0.0, 1.0).sample(dims))
         cand_logpost = self.logposterior(candidate)
-        cand_logpost_grad = tf.gradients(self.logposterior(candidate), candidate)[0]
+        cand_logpost_grad = tf.gradients(cand_logpost, candidate)[0]
+        # cand_logpost_grad = tf.gradients(self.logposterior(candidate), candidate)[0]
 
-        center_current =  self.params_log - candidate - 0.03 * cand_logpost_grad
-        center_cand =  candidate - self.params_log - 0.03 * self.params_logpost_grad
+        center_current =  self.params_log - candidate - \
+                0.5 * tf.matmul(Sigma_proposal, cand_logpost_grad)
+        center_cand =  candidate - self.params_log - \
+                0.5 * tf.matmul(Sigma_proposal, self.params_logpost_grad)
 
         logprob = cand_logpost - self.params_logpost
         logprob -= 0.5 * tf.reduce_sum(tf.square(tf.matmul(L_inv, center_current)))
@@ -160,7 +168,7 @@ class geo_normal(object):
         op_param = tf.assign(self.params_log, new)
         op_logpost = tf.assign(self.params_logpost, new_logpost)
         op_logpost_grad = tf.assign(self.params_logpost_grad, new_logpost_grad)
-        return op_param, op_logpost, new_logpost_grad
+        return op_param, op_logpost, op_logpost_grad
 
 
     def callpost(self):
