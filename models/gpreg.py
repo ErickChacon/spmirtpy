@@ -7,6 +7,7 @@ class geo_normal(object):
 
     """Univariate Geostatistical Linear Model"""
 
+
     def __init__(self, y, dist, params):
         """
         Constructor:
@@ -16,19 +17,64 @@ class geo_normal(object):
         :params: initial parameters
 
         """
+
         self.n = y.size
         self.X = np.concatenate([np.ones([self.n, 1]), np.eye(self.n)], 1)
         self.params_log = tf.Variable(params, dtype = tf.float32)
+
+        # Data as dictionary for tensorflow
         self.tf_y = tf.placeholder(dtype = tf.float32)
         self.tf_dis = tf.placeholder(dtype = tf.float32)
         self.feed_dict = {
                 self.tf_dis: dist,
                 self.tf_y: y
                 }
+
+
+    def sample(self, Sigma_proposal, niter, sampler = "rwmh"):
+        """TODO: Docstring for sample.
+        :returns: TODO
+
+        """
+
+        # Prior hyperparameters
         self.prior_c_sigma2 = tf.constant(1.0)
 
+        # Constants
+        Sigma_proposal = tf.constant(Sigma_proposal, dtype = tf.float32)
+        Sigma_proposal_chol = tf.cholesky(Sigma_proposal)
 
-    def posterior(self, params_log):
+        # Log posterior of initial parameters
+        initial_logpost = eval(self.logposterior(self.params_log), self.feed_dict)
+        self.params_logpost = tf.Variable(initial_logpost, dtype = tf.float32)
+
+        # Gradient log posterior of initial parameters and mala sampler
+        if sampler == "mala":
+            initial_logpost_grad = \
+                    eval(tf.gradients(self.logposterior(self.params_log),
+                        self.params_log)[0], self.feed_dict)
+            print(initial_logpost_grad)
+            self.params_logpost_grad = tf.Variable(initial_logpost_grad)
+            updater = self.update_mala(Sigma_proposal_chol)
+
+        # Metropolis Hastings sampler
+        if sampler == "rwmh":
+            updater = self.update_rwmh(Sigma_proposal_chol)
+
+        # Allocate memory for samples
+        samples = np.zeros((niter, 2))
+
+        # Iterate trough sampler and save samples
+        with tf.Session() as sess:
+            sess.run(tf.global_variables_initializer())
+            for i in range(niter):
+                params_new = sess.run(updater, self.feed_dict)
+                samples[i, :] = np.reshape(np.exp(params_new[0]), 2)
+
+        return samples
+
+
+    def logposterior(self, params_log):
         """TODO: Docstring for posterior.
 
         :params_log: TODO
@@ -37,76 +83,85 @@ class geo_normal(object):
         :returns: TODO
 
         """
-        n = tf.size(self.tf_y)
-        zeros_n = tf.zeros([n, 1])
+        zeros_n = tf.zeros([self.n, 1])
         sigma2 = tf.exp(params_log[0,0])
         phi = tf.exp(params_log[1,0])
 
         Sigma_gp = tf_cov_exp(self.tf_dis, sigma2, phi, 0.0)
         Sigma_marginal = self.prior_c_sigma2 + Sigma_gp
-        Sigma_z = Sigma_marginal + tf.eye(n)
+        Sigma_z = Sigma_marginal + tf.eye(self.n)
         posterior_prob_log = dmvnorm(self.tf_y, zeros_n, Sigma_z) + \
                 distr.Normal(tf.log(1.0), 0.4).log_prob(params_log[0,0]) + \
                 distr.Normal(tf.log(0.08), 0.4).log_prob(params_log[1,0])
         return posterior_prob_log
 
 
-    def update(self, Sigma_proposal_chol):
-        """TODO: Docstring for update.
+    def update_rwmh(self, L_proposal):
+        """TODO: Docstring for update_rwmh.
 
-        :x: TODO
+        :L_proposal: Lower traingular cholesky decomposition of the covariance of the
+        proposal distribution
         :returns: TODO
 
         """
-        n = tf.size(self.tf_y)
-        zeros_n = tf.zeros([n, 1])
-        params_log_aux = self.params_log + \
-                tf.matmul(Sigma_proposal_chol,
-                        tf.distributions.Normal(0.0, 1.0).sample(tf.shape(self.params_log)))
+        zeros_n = tf.zeros([self.n, 1])
+        dims = tf.shape(self.params_log)
 
-        params_log_aux_posterior = self.posterior(params_log_aux)
-        acceptance_prob_log = params_log_aux_posterior - self.params_log_posterior
+        candidate = self.params_log
+        candidate += tf.matmul(L_proposal, distr.Normal(0.0, 1.0).sample(dims))
+        cand_logpost = self.logposterior(candidate)
+        logprob = cand_logpost - self.params_logpost
 
-        uniform_log = tf.log(tf.distributions.Uniform().sample())
-        params_log_new = tf.cond(tf.greater(acceptance_prob_log,uniform_log),\
-                lambda: params_log_aux, lambda: self.params_log)
-        params_log_posterior_new = tf.cond(tf.greater(acceptance_prob_log,uniform_log),\
-                lambda: params_log_aux_posterior, lambda: self.params_log_posterior)
+        log_unif = tf.log(distr.Uniform().sample())
+        new, new_logpost = tf.cond(
+                tf.greater(logprob, log_unif),
+                lambda: (candidate, cand_logpost),
+                lambda: (self.params_log, self.params_logpost)
+                )
 
-        op1 = tf.assign(self.params_log, params_log_new)
-        op2 = tf.assign(self.params_log_posterior, params_log_posterior_new)
-        return op1, op2
-        # return params_log_new
+        op_param = tf.assign(self.params_log, new)
+        op_logpost = tf.assign(self.params_logpost, new_logpost)
+        return op_param, op_logpost
 
-    def sample(self, Sigma_proposal, niter):
-        """TODO: Docstring for sample.
+
+    def update_mala(self, L_proposal):
+        """TODO: Docstring for update_rwmh.
+
+        :L_proposal: Lower traingular cholesky decomposition of the covariance of the
+        proposal distribution
         :returns: TODO
 
         """
-        # Allocate memory for samples
-        samples = np.zeros((niter, 2))
+        zeros_n = tf.zeros([self.n, 1])
+        dims = tf.shape(self.params_log)
 
-        # Constants
-        Sigma_proposal = tf.constant(Sigma_proposal, dtype = tf.float32)
-        Sigma_proposal_chol = tf.cholesky(Sigma_proposal)
+        L_inv = tf.matrix_inverse(L_proposal)
 
-        # Log posterior of initial parameters
-        aux = initialize(self.posterior(self.params_log), self.feed_dict)
-        self.params_log_posterior = tf.Variable(aux, dtype = tf.float32)
+        candidate = self.params_log + 0.03 * self.params_logpost_grad
+        candidate += tf.matmul(L_proposal, distr.Normal(0.0, 1.0).sample(dims))
+        cand_logpost = self.logposterior(candidate)
+        cand_logpost_grad = tf.gradients(self.logposterior(candidate), candidate)[0]
 
-        # Metropolis Hastings sampler
-        updater = self.update(Sigma_proposal_chol)
+        center_current =  self.params_log - candidate - 0.03 * cand_logpost_grad
+        center_cand =  candidate - self.params_log - 0.03 * self.params_logpost_grad
 
-        # Iterate trough MH sampler
-        sess = tf.Session()
-        sess.run(tf.global_variables_initializer())
-        for i in range(niter):
-            params_new, params_log_posterior_new = sess.run(updater, self.feed_dict)
-            samples[i, :] = np.reshape(np.exp(params_new), 2)
-            # print(sess.run(params_log_posterior, feed_dict))
+        logprob = cand_logpost - self.params_logpost
+        logprob -= 0.5 * tf.reduce_sum(tf.square(tf.matmul(L_inv, center_current)))
+        logprob += 0.5 * tf.reduce_sum(tf.square(tf.matmul(L_inv, center_cand)))
 
-        # sess.run(updater, feed_dict)
-        return samples
+        log_unif = tf.log(distr.Uniform().sample())
+        new, new_logpost, new_logpost_grad = tf.cond(
+                tf.greater(logprob, log_unif),
+                lambda: (candidate, cand_logpost, cand_logpost_grad),
+                lambda: (self.params_log, self.params_logpost,
+                    self.params_logpost_grad)
+                )
+
+        op_param = tf.assign(self.params_log, new)
+        op_logpost = tf.assign(self.params_logpost, new_logpost)
+        op_logpost_grad = tf.assign(self.params_logpost_grad, new_logpost_grad)
+        return op_param, op_logpost, new_logpost_grad
+
 
     def callpost(self):
         """TODO: Docstring for callpost.
@@ -120,8 +175,8 @@ class geo_normal(object):
 
 
 
-def initialize(tensor, dictionary):
-    """TODO: Docstring for initialize.
+def eval(tensor, dictionary):
+    """TODO: Docstring for eval.
     :tensor: TODO
     :returns: TODO
 

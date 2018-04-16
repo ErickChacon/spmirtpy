@@ -73,8 +73,7 @@ def update(params_log, params_log_posterior, Sigma_proposal_chol, tf_dis, tf_y,
 
     op1 = tf.assign(params_log, params_log_new)
     op2 = tf.assign(params_log_posterior, params_log_posterior_new)
-    return op1, op2
-    # return params_log_new
+    return op1, op2 # return params_log_new
 
 
 def posterior(params_log, tf_dis, tf_y, prior_c_sigma2):
