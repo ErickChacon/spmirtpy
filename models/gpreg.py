@@ -31,6 +31,40 @@ class geo_normal(object):
                 }
 
 
+    def map(self):
+        """ Maximum a Posteriori: Mode of the posterior distribution
+        :returns: estimation of parameters
+
+        """
+        from datetime import datetime
+        # Prior hyperparameters
+        self.prior_c_sigma2 = tf.constant(1.0)
+
+        tf_loss = - self.logposterior(self.params_log)
+        train_op = tf.train.AdamOptimizer(0.1).minimize(tf_loss)
+
+        old_loss = 10000
+        loss = 0
+        tol = 0.0001
+        step = 0
+
+        sess = tf.Session()
+        sess.run(tf.global_variables_initializer())
+
+        start_time = datetime.now()
+        while np.abs(old_loss - loss) > tol:
+            step += 1
+            old_loss = loss
+            _, loss = sess.run([train_op, tf_loss], self.feed_dict)
+            print(step, loss, np.exp(sess.run(self.params_log)).reshape(-1))
+        time_elapsed = datetime.now() - start_time
+        print('Time elapsed (hh:mm:ss.ms) {}'.format(time_elapsed))
+
+        # print(step, sess.run(tf_loss, self.feed_dict),
+        #         sess.run(self.params_log))
+        return np.exp(sess.run(self.params_log))
+
+
     def sample(self, Sigma_proposal, niter, sampler = "rwmh", h = 1.0):
         """TODO: Docstring for sample.
         :returns: TODO
