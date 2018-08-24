@@ -237,6 +237,7 @@ def dmvnorm(y, mean, sigma):
     loglike += - 0.5 * tf.reduce_sum(tf.square(kern_sqr))
     return(loglike)
 
+
 def tf_cov_exp(d, sigma2, phi, nugget):
     S = sigma2 * tf.exp(- d / phi) + nugget * tf.eye(tf.shape(d)[1])
     return(S)
